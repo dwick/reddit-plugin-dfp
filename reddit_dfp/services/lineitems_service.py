@@ -29,7 +29,7 @@ def _date_to_string(date, format="%d/%m/%y"):
 
 def _get_campaign_name(campaign):
     return ("%s [%s-%s]" % (
-                    campaign.link_id,
+                    campaign._fullname,
                     _date_to_string(campaign.start_date),
                     _date_to_string(campaign.end_date)))[:255]
 
