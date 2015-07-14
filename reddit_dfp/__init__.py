@@ -9,6 +9,9 @@ class Dfp(Plugin):
     needs_static_build = False
 
     config = {
+        ConfigValue.bool: [
+            "dfp_test_mode",
+        ],
         ConfigValue.int: [
             "dfp_network_code",
             "dfp_test_network_code",
