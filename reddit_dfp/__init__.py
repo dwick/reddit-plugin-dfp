@@ -15,8 +15,6 @@ class Dfp(Plugin):
         ConfigValue.int: [
             "dfp_network_code",
             "dfp_test_network_code",
-            "dfp_selfserve_salesperson_id",
-            "dfp_selfserve_trafficker_id",
         ],
         ConfigValue.str: [
             "dfp_project_id",
@@ -27,6 +25,8 @@ class Dfp(Plugin):
             "dfp_selfserve_template_name",
             "dfp_selfserve_mobile_web_placement_name",
             "dfp_selfserve_dekstop_placement_name",
+            "dfp_selfserve_salesperson_name",
+            "dfp_selfserve_trafficker_name",
         ],
     }
 
@@ -45,7 +45,20 @@ class Dfp(Plugin):
         from reddit_dfp.services import (
             placement_service,
             template_service,
+            user_service,
         )
+
+        salesperson = user_service.get_user_by_name(
+            g.dfp_selfserve_salesperson_name,
+        )
+        trafficker = user_service.get_user_by_name(
+            g.dfp_selfserve_trafficker_name,
+        )
+
+        if not salesperson:
+            raise ValueError("cannot find salesperson '%s'" % g.dfp_selfserve_salesperson_name)
+        if not trafficker:
+            raise ValueError("cannot find trafficker '%s'" % g.dfp_selfserve_trafficker_name)
 
         template = template_service.get_template_by_name(
             g.dfp_selfserve_template_name)
@@ -69,6 +82,8 @@ class Dfp(Plugin):
         g.dfp_selfserve_template_id = int(template.id)
         g.dfp_selfserve_mobile_web_placement_id = int(mobile_web_placement.id)
         g.dfp_selfserve_desktop_placement_id = int(desktop_placement.id)
+        g.dfp_selfserve_salesperson_id = int(salesperson.id)
+        g.dfp_selfserve_trafficker_id = int(trafficker.id)
 
     def load_controllers(self):
         from reddit_dfp.controllers.linkcontroller import LinkController
