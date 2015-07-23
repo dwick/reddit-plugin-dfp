@@ -1,3 +1,5 @@
+from pylons import g
+
 from r2.lib import promote
 from r2.lib.hooks import HookRegistrar
 from r2.models import (
@@ -11,21 +13,32 @@ from reddit_dfp.services import creatives_service
 hooks = HookRegistrar()
 
 @hooks.on("promote.new_promotion")
-@hooks.on("promote.edit_promotion")
-def upsert_promotion(link):
-    queue.push("upsert_promotion", {
+def new_promotion(link):
+    g.dfp_queue_manager.get("creatives").push({
         "link": link._fullname,
     })
 
-    action = ("activate" 
-                if promote.is_accepted(link) and not link._deleted else
-                    "deactivate")
-    campaigns = list(PromoCampaign._by_link(link._id))
+    g.dfp_queue_manager.get("orders").push({
+        "link": link._fullname,
+        "action": "insert",
+    })
 
-    if not campaigns:
-        return
 
-    queue.push(action, { "campaigns": ",".join([campaign._fullname for campaign in campaigns]) })
+@hooks.on("promote.edit_promotion")
+def edit_promotion(link):
+    approve = promote.is_accepted(link) and not link._deleted
+    payload = {
+        "link": link._fullname,
+        "next": {
+            "queue": "orders",
+            "payload": {
+                "action": "approve" if approve else "reject",
+                "link": link._fullname,
+            },
+        },
+    }
+
+    g.dfp_queue_manager.get("creatives").push(payload)
 
 
 @hooks.on("promote.new_campaign")

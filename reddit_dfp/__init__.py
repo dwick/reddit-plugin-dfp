@@ -31,12 +31,18 @@ class Dfp(Plugin):
     }
 
     def declare_queues(self, queues):
-        from r2.config.queues import MessageQueue
-        from reddit_dfp import queue
+        from reddit_dfp.queue import QueueManager
 
-        queues.declare({
-            queue.DFP_QUEUE: MessageQueue(bind_to_self=True),
-        })
+        queue = QueueManager()
+
+        queue.add("advertisers")
+        queue.add("creatives")
+        queue.add("orders")
+        queue.add("lineitems")
+
+        queue.register_all(queues)
+
+        self.queue_manager = queue
 
     def add_routes(self, mc):
         mc("/api/dfp/link", controller="link", action="link_from_id")
@@ -90,7 +96,8 @@ class Dfp(Plugin):
         from reddit_dfp.hooks import hooks
         from reddit_dfp.lib import dfp
 
-        dfp.load_client()
-        hooks.register_all()
+        # dfp.load_client()
+        # hooks.register_all()
 
-        self.load_cached_ids()
+        # self.load_cached_ids()
+        # g.dfp_queue_manager = self.queue_manager

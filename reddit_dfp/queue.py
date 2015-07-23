@@ -36,6 +36,170 @@ class Processor():
         existing.append(handler)
 
 
+class Queue():
+    def __init__(self, name, **options):
+        self.name = self._get_fq_name(name)
+        self.options = options
+
+    def push(self, payload):
+        message = json.dumps(payload)
+        amqp.add_item(self.name, message)
+        g.log.debug("%s: queued message: \"%s\"" % (self.name, message))
+
+    @staticmethod
+    def _get_fq_name(name):
+        return "%s_q" % name
+
+
+class QueueManager():
+    def __init__(self):
+        self.queues = {};
+
+    def add(self, name, **options):
+        self.queues[name] = Queue(name, **options)
+
+    def get(self, name):
+        return getattr(self.queues, name, None)
+
+    def register_all(self, queues):
+        from r2.config.queues import MessageQueue
+
+        queues.declare({
+            queue.name: MessageQueue(bind_to_self=True, **queue.options)
+        for queue in self.queues.itervalues()})
+
+
+def process_advertisers(limit=10):
+    from r2.models import (
+        Thing,
+    )
+
+    from reddit_dfp.services import (
+        advertisers_service,
+    )
+
+    @g.stats.amqp_processor("advertisers_q")
+    def _process(messages, channel):
+        fullnames = []
+        callbacks = []
+
+        for message in messages:
+            data = json.loads(message.body)
+
+            fullnames.append(data["user"])
+
+            if hasattr(data, "next"):
+                callbacks.append(data["next"])
+
+        users = Thing._by_fullname(
+            fullnames,
+            data=True,
+            return_dict=False,
+        )
+
+        advertisers_service.bulk_upsert(users)
+
+        for callback in callbacks:
+            g.dfp_queue_manager.get(
+                callback["queue"]).push(
+                    callback["payload"])
+
+
+    amqp.handle_items("advertisers_q", _process, limit=limit)
+
+
+def process_creatives(limit=10):
+    from r2.models import (
+        Thing,
+    )
+
+    from reddit_dfp.services import (
+        creatives_service,
+    )
+
+    @g.stats.amqp_processor("creatives_q")
+    def _process(messages, channel):
+        fullnames = []
+        callbacks = []
+
+        for message in messages:
+            data = json.loads(message.body)
+
+            fullnames.append(data["user"])
+
+            if hasattr(data, "next"):
+                callbacks.append(data["next"])
+
+        links = Thing._by_fullname(
+            fullnames,
+            data=True,
+            return_dict=False,
+        )
+
+        creatives_service.bulk_upsert(links)
+
+        for callback in callbacks:
+            g.dfp_queue_manager.get(
+                callback["queue"]).push(
+                    callback["payload"])
+
+
+    amqp.handle_items("creatives_q", _process, limit=limit)
+
+
+def process_orders(limit=10):
+    from r2.models import (
+        Thing,
+    )
+
+    from reddit_dfp.services import (
+        orders_service,
+    )
+
+    @g.stats.amqp_processor("orders_q")
+    def _process(messages, channel):
+        fullnames = []
+        inserts = []
+        approvals = []
+        rejections = []
+        callbacks = []
+
+        for message in messages:
+            data = json.loads(message.body)
+            action = data["action"]
+            fullname = data["link"]
+
+            fullnames.append(fullname)
+
+            if action == "insert":
+                inserts.append(fullname)
+            elif action == "approve":
+                approvals.append(fullname)
+            elif action == "reject":
+                rejections.append(fullname)
+
+            if hasattr(data, "next"):
+                callbacks.append(data["next"])
+
+        links = Thing._by_fullname(
+            fullnames,
+            data=True,
+            return_dict=False,
+        )
+
+        orders_service.bulk_insert(filter(lambda link: link._fullname in inserts, links))
+        orders_service.approve(filter(lambda link: link._fullname in approvals, links))
+        orders_service.reject(filter(lambda link: link._fullname in rejections, links))
+
+        for callback in callbacks:
+            g.dfp_queue_manager.get(
+                callback["queue"]).push(
+                    callback["payload"])
+
+
+    amqp.handle_items("orders_q", _process, limit=limit)
+
+
 def process():
     from r2.models import (
         Account,
@@ -141,13 +305,4 @@ def process():
             raise e
 
     amqp.consume_items(DFP_QUEUE, _handler, verbose=False)
-
-
-def push(action, payload):
-    g.log.debug("%s: queuing action \"%s\"" % (DFP_QUEUE, action))
-    message = json.dumps({
-        "action": action,
-        "payload": payload,
-    })
-    amqp.add_item(DFP_QUEUE, message)
 

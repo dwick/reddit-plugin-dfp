@@ -22,44 +22,6 @@ LINE_ITEM_DEFAULTS = {
     "reserveAtCreation": False,
 }
 
-class LineItemsServices(ServiceWrapper):
-    _singular_name = "LineItem"
-    _plural_name = "LineItems"
-
-    @classmethod
-    def new(cls, name, start, end,
-            lineitem_type, cost_per_unit, cost_type,
-            goal, targeting, order_id,
-            skip_inventory=False, **kwargs):
-        lineitem = {
-            "name": name,
-            "lineItemType": lineitem_type,
-            "costPerUnit": cost_per_unit,
-            "costType": cost_type,
-            "targetPlatform": "ANY", # other targets are deprecated
-            "skipInventoryCheck": skip_inventory,
-            "primaryGoal": goal,
-            "targeting": targeting,
-            "orderId": order_id,
-        }
-
-        # TODO: non-global timezone_id
-        now = datetime.today()
-        now = now.replace(tzinfo=start_date.tzinfo)
-
-        lineitem["startDateTime"] = utils.datetime_to_dfp_datetime(
-            start_date, timezone_id=g.dfp_timezone_id)
-        lineitem["endDateTime"] = utils.datetime_to_dfp_datetime(
-            end_date, timezone_id=g.dfp_timezone_id)
-
-        if start_date < now:
-            lineitem["startDateTimeType"] = "IMMEDIATELY"
-
-        if end_date < now:
-            raise ValueError("can't creative lineitem that ends in the past. (%s-%s)" % (start_date, end_date))
-
-        return merge.merge_deep(lineitem, kwargs)
-
 
 def _date_to_string(date, format="%d/%m/%y"):
     return date.strftime(format)
@@ -113,9 +75,25 @@ def _priority_to_lineitem_type(priority):
         return "PRICE_PRIORITY"
 
 
-def _campaign_to_lineitem(campaign, order=None, existing=None):
-    if not (existing or order):
-        raise ValueError("must either pass an order or an existing lineitem.")
+def _campaign_to_lineitem(campaign, order=None):
+    lineitem = LineitemsService.new(
+        name=_get_campaign_name(campaign),
+        start=campaign.start_date,
+        end=campaign.end_date
+        cost_per_unit=utils.pennies_to_dfp_money(campaign.cpm),
+        cost_type=_get_cost_type(campaign),
+        skip_inventory=campaign.priority.inventory_override,
+        goal=_get_goal_type(campaign),
+        targeting={
+            "inventoryTargeting": {
+                "targetedPlacementIds": _get_placement_ids(campaign),
+            },
+        },
+    )
+
+    if order:
+        lineitem["orderId"] = order.id
+
 
     lineitem = {
         "name": _get_campaign_name(campaign),
@@ -159,57 +137,51 @@ def _campaign_to_lineitem(campaign, order=None, existing=None):
         })
 
 
-def get_lineitem(campaign):
-    dfp_lineitem_service = DfpService("LineItemService")
+def get_by_campaign(campaign):
+    lineitem_id = getattr(campaign, "dfp_lineitem_id", None)
 
-    values = [{
-        "key": "externalId",
-        "value": {
-            "xsi_type": "TextValue",
-            "value": campaign._fullname,
-        },
-    }]
-    query = "WHERE externalId = :externalId"
-    statement = dfp.FilterStatement(query, values, 1)
-    response = dfp_lineitem_service.execute(
-                    "getLineItemsByStatement",
-                    statement.ToStatement())
-
-    if ("results" in response and len(response["results"])):
-        return response["results"][0]
-    else:
+    if not lineitem_id:
         return None
 
+    return LineItemsService.by_id(lineitem_id)
 
-def create_lineitem(user, campaign):
-    dfp_lineitem_service = DfpService("LineItemService")
-    order = orders_service.upsert_order(user)
+
+def insert(campaign):
+    author = Account._byID(campaign.owner_id)
+    link = Link._byID(campaign.link_id)
+    order = orders.upsert(link)
 
     try:
-        lineitem = _campaign_to_lineitem(campaign, order=order)
+        lineitem = LineitemsService.new(
+            name=_get_campaign_name(campaign),
+            start=campaign.start_date,
+            end=campaign.end_date
+            order_id=order.id,
+            cost_per_unit=utils.pennies_to_dfp_money(campaign.cpm),
+            cost_type=_get_cost_type(campaign),
+            skip_inventory=campaign.priority.inventory_override,
+            goal=_get_goal_type(campaign),
+            targeting={
+                "inventoryTargeting": {
+                    "targetedPlacementIds": _get_placement_ids(campaign),
+                },
+            },
+        )
     except ValueError as e:
         g.log.debug("unable to convert campaign to valid line item for campaign %s" % campaign._fullname)
         raise e
-    lineitems = dfp_lineitem_service.execute("createLineItems", [lineitem])
 
-    return lineitems[0]
+    return LineitemsService.insert_one(lineitem)
 
 
-def upsert_lineitem(user, campaign):
-    dfp_lineitem_service = DfpService("LineItemService")
-    lineitem = get_lineitem(campaign)
+def upsert(campaign):
+    lineitem_id = getattr(campaign, "dfp_lineitem_id", None)
 
-    if not lineitem:
-        return create_lineitem(user, campaign)
+    if not lineitem_id:
+        return insert(campaign)
 
-    if lineitem["isArchived"]:
-        raise ValueError("cannot update archived lineitem (lid: %s, cid: %s)" %
-                (lineitem["id"], campaign._id))
-
-    updated = _campaign_to_lineitem(campaign, existing=lineitem)
-    lineitems = dfp_lineitem_service.execute("updateLineItems", [updated])
-
-    return lineitems[0]
+    updates = _campaign_to_lineitem(campaign)
+    return LineItemsServices.update_one(lineitem_id, updates)
 
 
 def associate_with_creative(lineitem, creative):

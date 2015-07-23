@@ -6,6 +6,13 @@ from pylons import g
 ONE_MICRO_DOLLAR = 1000000
 
 
+
+def fullname_to_id(fullname):
+    prefix, id36 = fullname.split("_", 2)
+
+    return int(id36, 10)
+
+
 def get_dfp_subreddit():
     from r2.models import Subreddit
     return Subreddit._byID(Subreddit.get_promote_srid())
